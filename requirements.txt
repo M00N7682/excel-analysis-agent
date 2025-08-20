@@ -1,0 +1,16 @@
+streamlit
+python-dotenv
+pandas
+openpyxl
+tabulate
+tenacity
+langchain
+langchain-openai
+langchain-experimental
+openai
+langchain_openai
+matplotlib
+plotly
+altair
+seaborn
+PyQt6
