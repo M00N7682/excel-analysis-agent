@@ -62,34 +62,111 @@ def read_path_or_buffer(path_or_buffer) -> pd.DataFrame:
             return pd.read_excel(p)
 
 
-st.title("CSV/Excel 데이터 분석 에이전트")
+st.title("CSV/Excel 데이터 분석 에이전트 made by moon")
 
 # Sidebar: file selection / upload and model options
 st.sidebar.header("데이터 입력")
 server_files = list_server_files(DATA_DIR)
-uploaded = st.sidebar.file_uploader("CSV 또는 Excel 업로드", type=["csv", "xlsx", "xls"])
-chosen_server_file = None
-if server_files:
-    chosen_server_file = st.sidebar.selectbox("서버 파일 선택", ["(없음)"] + server_files)
 
-data_source = None
-if uploaded is not None:
-    data_source = uploaded
-elif chosen_server_file and chosen_server_file != "(없음)":
-    data_source = chosen_server_file
-else:
+# 1. 여러 파일 업로드 및 서버 파일 선택 지원
+uploaded_files = st.sidebar.file_uploader(
+    "CSV 또는 Excel 업로드 (여러 개 가능)", type=["csv", "xlsx", "xls"], accept_multiple_files=True
+)
+chosen_server_files = []
+if server_files:
+    chosen_server_files = st.sidebar.multiselect("서버 파일 선택 (여러 개 가능)", server_files)
+
+all_files = []
+if uploaded_files:
+    all_files.extend(uploaded_files)
+if chosen_server_files:
+    all_files.extend(chosen_server_files)
+
+if not all_files:
     st.sidebar.info("왼쪽에서 파일을 업로드하거나 서버에 있는 파일을 선택하세요. 현재 data/ 폴더 파일 목록:")
     for f in server_files:
         st.sidebar.write(f)
-
-if data_source is None:
     st.stop()
 
-try:
-    df = read_path_or_buffer(data_source)
-except Exception as e:
-    st.error(f"데이터 로드 실패: {e}")
+# 2. 각 파일별로 시트 선택 및 DataFrame 생성
+dataframes = []
+for idx, file in enumerate(all_files):
+    file_label = getattr(file, "name", str(file))
+    is_excel = str(file_label).lower().endswith((".xlsx", ".xls"))
+    
+    st.sidebar.markdown(f"**{file_label}**")
+    
+    if is_excel:
+        # 엑셀 파일: 시트 목록 읽기
+        try:
+            if hasattr(file, "read"):
+                # UploadedFile: BytesIO
+                file.seek(0)
+                xls = pd.ExcelFile(file)
+            else:
+                xls = pd.ExcelFile(file)
+            sheet_names = xls.sheet_names
+            
+            # 여러 시트 선택 가능
+            selected_sheets = st.sidebar.multiselect(
+                f"시트 선택", sheet_names, default=[sheet_names[0]], key=f"sheets_{idx}_{file_label}"
+            )
+            
+            for sheet in selected_sheets:
+                try:
+                    df_temp = pd.read_excel(xls, sheet_name=sheet)
+                    df_temp['_source_file'] = file_label
+                    df_temp['_source_sheet'] = sheet
+                    dataframes.append((f"{file_label}_{sheet}", df_temp))
+                except Exception as e:
+                    st.error(f"{file_label} 시트 {sheet} 읽기 실패: {e}")
+        except Exception as e:
+            st.error(f"{file_label} 시트 목록 읽기 실패: {e}")
+            continue
+    else:
+        # CSV 파일
+        try:
+            if hasattr(file, "read"):
+                file.seek(0)
+                df_temp = pd.read_csv(file)
+            else:
+                df_temp = pd.read_csv(file)
+            df_temp['_source_file'] = file_label
+            dataframes.append((file_label, df_temp))
+        except Exception as e:
+            st.error(f"{file_label} 읽기 실패: {e}")
+
+# 3. 여러 DataFrame 합치기 옵션
+if not dataframes:
+    st.error("선택된 파일에서 데이터를 읽을 수 없습니다.")
     st.stop()
+
+if len(dataframes) > 1:
+    st.sidebar.markdown("---")
+    merge_option = st.sidebar.radio(
+        "여러 데이터프레임 처리 방법", ["각각 개별 분석", "모두 합치기 (concat)"], key="merge_option"
+    )
+    
+    if merge_option == "모두 합치기 (concat)":
+        try:
+            df = pd.concat([d[1] for d in dataframes], ignore_index=True)
+            st.info(f"{len(dataframes)}개 파일/시트가 합쳐졌습니다. (총 {len(df):,}행)")
+        except Exception as e:
+            st.error(f"합치기 실패: {e}")
+            st.stop()
+    else:
+        # 개별 분석을 위해 첫 번째 선택
+        selected_df = st.sidebar.selectbox(
+            "분석할 데이터 선택", 
+            [f"{i+1}. {name} ({len(df):,}행)" for i, (name, df) in enumerate(dataframes)],
+            key="selected_df"
+        )
+        selected_idx = int(selected_df.split('.')[0]) - 1
+        df = dataframes[selected_idx][1]
+        st.info(f"선택된 데이터: {dataframes[selected_idx][0]} ({len(df):,}행)")
+else:
+    df = dataframes[0][1]
+    st.info(f"로드된 데이터: {dataframes[0][0]} ({len(df):,}행)")
 
 st.subheader("데이터 미리보기")
 st.write(df.head())
